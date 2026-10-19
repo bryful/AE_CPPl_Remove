@@ -142,6 +142,9 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="AE_CPPl_Remove.cpp" />
+    <ClInclude Include="..\CpplCore.h" />
+    <ClInclude Include="..\assets\resource.h" />
+    <ResourceCompile Include="AppIcon.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

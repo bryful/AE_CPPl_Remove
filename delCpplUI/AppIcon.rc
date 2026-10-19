@@ -1,0 +1,2 @@
+#include "../assets/resource.h"
+IDI_APP_ICON ICON "../assets/icons/delCpplUI.ico"
