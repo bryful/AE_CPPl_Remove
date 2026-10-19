@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <cwctype>
 #include <filesystem>
 #include <iostream>
@@ -138,7 +139,32 @@ struct Analysis
     uint32_t rootSize = 0;
     std::vector<Chunk> cppl;
 };
-void scanChunks(File& file, uint64_t begin, uint64_t end, unsigned depth, Analysis& result)
+class ChunkReader
+{
+    File& file;
+    const uint64_t fileSize;
+    std::vector<unsigned char> buffer;
+    uint64_t cacheOffset = 0;
+    size_t cacheSize = 0;
+public:
+    explicit ChunkReader(File& input, uint64_t size) : file(input), fileSize(size), buffer(64 * 1024) {}
+    void readAt(uint64_t offset, void* destination, size_t length)
+    {
+        checkCancel();
+        if (offset > fileSize || length > fileSize - offset || length > buffer.size())
+            throw std::runtime_error("チャンクの読み込み範囲が不正です");
+        // 小さなヘッダごとのシークとReadFileをまとめ、検査内容は維持する。
+        if (offset < cacheOffset || offset - cacheOffset > cacheSize || length > cacheSize - static_cast<size_t>(offset - cacheOffset))
+        {
+            cacheOffset = offset;
+            cacheSize = static_cast<size_t>(std::min<uint64_t>(buffer.size(), fileSize - offset));
+            file.seek(offset);
+            file.read(buffer.data(), static_cast<DWORD>(cacheSize));
+        }
+        std::memcpy(destination, buffer.data() + static_cast<size_t>(offset - cacheOffset), length);
+    }
+};
+void scanChunks(ChunkReader& reader, uint64_t begin, uint64_t end, unsigned depth, Analysis& result)
 {
     if (depth > 128) throw std::runtime_error("コンテナの階層が深すぎます");
     for (uint64_t offset = begin; offset < end;)
@@ -146,7 +172,7 @@ void scanChunks(File& file, uint64_t begin, uint64_t end, unsigned depth, Analys
         checkCancel();
         if (end - offset < 8) throw std::runtime_error("チャンクヘッダが途中で切れています");
         std::array<unsigned char, 8> header{};
-        file.seek(offset); file.read(header.data(), 8);
+        reader.readAt(offset, header.data(), 8);
         const uint32_t size = be32(header.data() + 4);
         const uint64_t physicalSize = uint64_t(8) + size + (size & 1);
         if (physicalSize > end - offset) throw std::runtime_error("チャンクが親の境界を超えています");
@@ -154,11 +180,11 @@ void scanChunks(File& file, uint64_t begin, uint64_t end, unsigned depth, Analys
         {
             if (size < 4) throw std::runtime_error("LISTのサイズが4未満です");
             std::array<unsigned char, 4> type{};
-            file.read(type.data(), 4);
+            reader.readAt(offset + 8, type.data(), 4);
             if (tag(type.data(), "CPPl")) result.cppl.push_back({ offset, size, depth });
             // btdkはLIST形式のヘッダを持つが、内容はチャンク列ではない。
             if (!tag(type.data(), "btdk"))
-                scanChunks(file, offset + 12, offset + 8 + size, depth + 1, result);
+                scanChunks(reader, offset + 12, offset + 8 + size, depth + 1, result);
         }
         else if (tag(header.data(), "RIFX") || tag(header.data(), "RIFF"))
         {
@@ -197,7 +223,8 @@ Analysis analyze(File& file)
              !tail.ends_with("<?xpacket end='w'?>") && !tail.ends_with("<?xpacket end='r'?>")))
             throw std::runtime_error("RIFX後方にXMPパケット以外のデータがあります");
     }
-    scanChunks(file, 12, rootEnd, 0, result);
+    ChunkReader reader(file, result.fileSize);
+    scanChunks(reader, 12, rootEnd, 0, result);
     return result;
 }
 void copyRange(File& source, File& destination, uint64_t start, uint64_t count)

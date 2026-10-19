@@ -79,6 +79,17 @@ class CliTests(unittest.TestCase):
         self.assertEqual(path.read_bytes(), original)
         self.assertEqual(path.with_stem('xmp_patched').read_bytes(), project(cppl(b''), opaque) + xmp)
 
+    def test_chunk_headers_cross_read_buffer_boundary(self):
+        # 先頭キャッシュは位置12から65536バイト。各ヘッダとLIST型を境界にまたがらせる。
+        for delta in (-6, -4, -2, 0, 2):
+            payload = b'x' * (65536 - 8 + delta)
+            prefix = chunk(b'blob', payload)
+            nested = chunk(b'LIST', b'test' + chunk(b'Utf8', b'z' * 70001))
+            original = project(prefix, cppl(), nested)
+            path = self.make('boundary' + str(delta) + '.aep', original)
+            self.run_cli(path, '-p')
+            self.assertEqual(path.with_stem(path.stem + '_patched').read_bytes(), project(prefix, cppl(b''), nested))
+
     def test_unrecognized_or_truncated_trailer_rejected(self):
         self.make('unknown.aep', project(cppl()) + b'unknown trailing data' * 5)
         self.make('short.aep', project(cppl()) + b'123')
