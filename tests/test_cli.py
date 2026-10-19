@@ -69,6 +69,45 @@ class CliTests(unittest.TestCase):
         self.make('empty.aep', project(cppl(b'')))
         self.assertIn('変更不要: 2', self.run_cli(self.root, '-p'))
         self.assertEqual(len(list(self.root.iterdir())), 2)
+
+    def test_xmp_trailer_and_opaque_btdk(self):
+        opaque = chunk(b'LIST', b'btdk /98 << /0 13 >> /0 << /1 <<')
+        xmp = b'<?xpacket begin="\xef\xbb\xbf" id="test"?>\n<x:xmpmeta>unchanged</x:xmpmeta>\n<?xpacket end="w"?>'
+        original = project(cppl(), opaque) + xmp
+        path = self.make('xmp.aep', original)
+        self.run_cli(path, '-p')
+        self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(path.with_stem('xmp_patched').read_bytes(), project(cppl(b''), opaque) + xmp)
+
+    def test_unrecognized_or_truncated_trailer_rejected(self):
+        self.make('unknown.aep', project(cppl()) + b'unknown trailing data' * 5)
+        self.make('short.aep', project(cppl()) + b'123')
+        self.make('truncated-xmp.aep', project(cppl()) + b'<?xpacket begin="test"?>' + b' ' * 100)
+        self.run_cli(self.root, '-p', code=1)
+        self.assertEqual(len(list(self.root.glob('*_patched.aep'))), 0)
+
+    def test_real_sample_when_available(self):
+        sample = EXE.parents[2] / 'sample/AAA.aep'
+        if not sample.exists():
+            self.skipTest('sample/AAA.aepがありません')
+        original = sample.read_bytes()
+        root_end = 8 + struct.unpack_from('>I', original, 4)[0]
+        offset = 12
+        while offset < root_end:
+            size = struct.unpack_from('>I', original, offset + 4)[0]
+            if original[offset:offset+4] == b'LIST' and original[offset+8:offset+12] == b'CPPl':
+                break
+            offset += 8 + size + (size & 1)
+        self.assertLess(offset, root_end)
+        removed = size - 4 + (size & 1)
+        expected = bytearray(original[:offset+12] + original[offset+8+size+(size & 1):])
+        struct.pack_into('>I', expected, 4, root_end - 8 - removed)
+        struct.pack_into('>I', expected, offset+4, 4)
+        path = self.make('real.aep', original)
+        self.run_cli(path, '-p')
+        self.assertEqual(path.with_stem('real_patched').read_bytes(), expected)
+        self.assertEqual(sample.read_bytes(), original)
+        self.run_cli(path.with_stem('real_patched'))
     def test_invalid_multiple_nested_and_continue(self):
         self.make('truncated.aep', project(cppl())[:-1])
         self.make('multiple.aep', project(cppl(), cppl()))

@@ -156,7 +156,9 @@ void scanChunks(File& file, uint64_t begin, uint64_t end, unsigned depth, Analys
             std::array<unsigned char, 4> type{};
             file.read(type.data(), 4);
             if (tag(type.data(), "CPPl")) result.cppl.push_back({ offset, size, depth });
-            scanChunks(file, offset + 12, offset + 8 + size, depth + 1, result);
+            // btdkはLIST形式のヘッダを持つが、内容はチャンク列ではない。
+            if (!tag(type.data(), "btdk"))
+                scanChunks(file, offset + 12, offset + 8 + size, depth + 1, result);
         }
         else if (tag(header.data(), "RIFX") || tag(header.data(), "RIFF"))
         {
@@ -175,9 +177,27 @@ Analysis analyze(File& file)
     if (!tag(header.data(), "RIFX") || !tag(header.data() + 8, "Egg!"))
         throw std::runtime_error("対応形式はRIFX / Egg!のAEPです");
     result.rootSize = be32(header.data() + 4);
-    if (result.rootSize < 4 || uint64_t(result.rootSize) + 8 != result.fileSize)
-        throw std::runtime_error("RIFXサイズと実ファイル長が一致しません");
-    scanChunks(file, 12, result.fileSize, 0, result);
+    const uint64_t rootEnd = uint64_t(result.rootSize) + 8;
+    if (result.rootSize < 4 || rootEnd > result.fileSize)
+        throw std::runtime_error("RIFXサイズが不正、またはファイルが途中で切れています");
+    if (rootEnd < result.fileSize)
+    {
+        // AEPはRIFXの外側にXMPパケットを付加する。終端まで不変でコピーする。
+        const uint64_t trailerSize = result.fileSize - rootEnd;
+        if (trailerSize < 34) throw std::runtime_error("RIFX後方のデータが未対応です");
+        std::array<char, 16> begin{};
+        file.seek(rootEnd); file.read(begin.data(), static_cast<DWORD>(begin.size()));
+        const auto tailLength = static_cast<DWORD>(std::min<uint64_t>(trailerSize, 64));
+        std::string tail(tailLength, '\0');
+        file.seek(result.fileSize - tailLength); file.read(tail.data(), tailLength);
+        const auto last = tail.find_last_not_of(" \t\r\n");
+        if (last != std::string::npos) tail.resize(last + 1);
+        if (std::string(begin.data(), begin.size()) != "<?xpacket begin=" ||
+            (!tail.ends_with("<?xpacket end=\"w\"?>") && !tail.ends_with("<?xpacket end=\"r\"?>") &&
+             !tail.ends_with("<?xpacket end='w'?>") && !tail.ends_with("<?xpacket end='r'?>")))
+            throw std::runtime_error("RIFX後方にXMPパケット以外のデータがあります");
+    }
+    scanChunks(file, 12, rootEnd, 0, result);
     return result;
 }
 void copyRange(File& source, File& destination, uint64_t start, uint64_t count)
