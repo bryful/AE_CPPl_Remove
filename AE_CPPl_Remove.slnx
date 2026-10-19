@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="AE_CPPl_Remove/AE_CPPl_Remove.vcxproj" Id="4b694fed-dab5-43ea-afa2-64feda8c161d" />
+</Solution>
